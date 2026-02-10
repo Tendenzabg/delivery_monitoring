@@ -207,10 +207,17 @@ if unordered_barcodes:
         })
     
     df_unordered = pd.DataFrame(data_unordered)
-    # Combine - Unordered items at the TOP
-    df_total = pd.concat([df_unordered, df_order], ignore_index=True)
 else:
-    df_total = df_order.copy()
+    df_unordered = pd.DataFrame()
+
+# Handle Excess Items (Ordered > 0 but Delivered > Ordered)
+# Remaining is Negative
+mask_excess = (df_order['Ordered_Qty'] > 0) & (df_order['Remaining'] < 0)
+df_excess = df_order[mask_excess].copy()
+df_others = df_order[~mask_excess].copy()
+
+# Combine: 1. Unordered, 2. Excess, 3. Others
+df_total = pd.concat([df_unordered, df_excess, df_others], ignore_index=True)
 
 # 6. Styling
 def highlight_row_bg(row):
@@ -220,10 +227,13 @@ def highlight_row_bg(row):
     # Red for Unordered (Ordered == 0)
     if ordered == 0:
         return ['background-color: #f8d7da; color: #721c24'] * len(row) # Red
-    # Green for Completed (Remaining <= 0)
-    elif remaining <= 0:
+    # Purple/Blue for Excess (Ordered > 0 AND Remaining < 0)
+    elif ordered > 0 and remaining < 0:
+        return ['background-color: #cce5ff; color: #004085'] * len(row) # Blue
+    # Green for Completed (Remaining == 0) - Note: Remaining <= 0 covered Excess before, so strict check needed
+    elif remaining == 0:
         return ['background-color: #d4edda; color: #155724'] * len(row) # Green
-    # Yellow for Pending
+    # Yellow for Pending (Remaining > 0)
     else:
         return ['background-color: #fff3cd; color: #856404'] * len(row) # Yellow/Orange
 
@@ -231,8 +241,9 @@ def highlight_row_bg(row):
 st.sidebar.markdown("---")
 st.sidebar.header("🔍 Филтриране на Данни")
 
-# Filter: Unordered Items
-show_unordered = st.sidebar.checkbox("⚠️ Покажи само непоръчани стоки", value=False)
+# Filter: Special Categories
+show_unordered = st.sidebar.checkbox("⚠️ Покажи ИЗВЪН поръчка (Red)", value=False)
+show_excess = st.sidebar.checkbox("📈 Покажи НАДВИШЕНИ количества (Blue)", value=False)
 
 # Text Search
 search_text = st.sidebar.text_input("Търсене по Concatenate (Текст)")
@@ -244,8 +255,13 @@ selected_concats = st.sidebar.multiselect("Изберете конкретен C
 # Apply Filters
 df_visible = df_total.copy()
 
-if show_unordered:
+if show_unordered and show_excess:
+    # Show both problematic categories
+    df_visible = df_visible[(df_visible['Ordered_Qty'] == 0) | (df_visible['Remaining'] < 0)]
+elif show_unordered:
     df_visible = df_visible[df_visible['Ordered_Qty'] == 0]
+elif show_excess:
+    df_visible = df_visible[(df_visible['Ordered_Qty'] > 0) & (df_visible['Remaining'] < 0)]
 
 if search_text:
     df_visible = df_visible[df_visible['Concatenate'].astype(str).str.contains(search_text, case=False, na=False)]
@@ -261,19 +277,29 @@ st.subheader("Общ Преглед")
 total_ordered = df_visible['Ordered_Qty'].sum()
 
 # Total Delivered (Planned): Sum of Delivered WHERE Ordered_Qty > 0
-total_delivered_planned = df_visible[df_visible['Ordered_Qty'] > 0]['Delivered'].sum()
+# Logic: We usually want to know how much of the PLAN was fulfilled.
+# If I ordered 10 and got 12, I "fulfilled" 10. The extra 2 are excess.
+# But "Total Delivered" in simple terms often just sums the column.
+# Let's keep "Доставено" as the simple sum of everything that MATCHED an order line (including excess).
+total_delivered_matching = df_visible[df_visible['Ordered_Qty'] > 0]['Delivered'].sum()
 
 # Total Unordered: Sum of Delivered WHERE Ordered_Qty == 0
 total_unordered = df_visible[df_visible['Ordered_Qty'] == 0]['Delivered'].sum()
 
-# Pending: Sum of Remaining WHERE Ordered_Qty > 0 (Remaining for unordered is negative, we don't count it as pending)
-total_pending = df_visible[df_visible['Ordered_Qty'] > 0]['Remaining'].sum()
+# Total Excess Qty: Sum of (Delivered - Ordered) WHERE Ordered > 0 AND Delivered > Ordered
+# This is equivalent to ABS(Remaining) where Remaining < 0 AND Ordered > 0
+excess_mask = (df_visible['Ordered_Qty'] > 0) & (df_visible['Remaining'] < 0)
+total_excess = df_visible[excess_mask]['Remaining'].abs().sum()
 
-col1, col2, col3, col4 = st.columns(4)
+# Pending: Sum of Remaining WHERE Remaining > 0
+total_pending = df_visible[df_visible['Remaining'] > 0]['Remaining'].sum()
+
+col1, col2, col3, col4, col5 = st.columns(5)
 col1.metric("Общо Поръчано", int(total_ordered))
-col2.metric("Доставено (Поръчано)", int(total_delivered_planned))
+col2.metric("Доставено (Вкл. надвишени)", int(total_delivered_matching))
 col3.metric("⚠️ Извън поръчка", int(total_unordered))
-col4.metric("Оставащо", int(total_pending))
+col4.metric("📈 Превишени к-ва", int(total_excess)) # Excess Quantities
+col5.metric("Оставащо", int(total_pending))
 
 st.subheader("Детален Статус")
 
