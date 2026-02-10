@@ -244,6 +244,7 @@ st.sidebar.header("🔍 Филтриране на Данни")
 # Filter: Special Categories
 show_unordered = st.sidebar.checkbox("⚠️ Покажи ИЗВЪН поръчка (Red)", value=False)
 show_excess = st.sidebar.checkbox("📈 Покажи НАДВИШЕНИ количества (Blue)", value=False)
+show_pending = st.sidebar.checkbox("📉 Покажи НЕДОСТАВЕНИ (Yellow)", value=False)
 
 # Text Search
 search_text = st.sidebar.text_input("Търсене по Concatenate (Текст)")
@@ -255,13 +256,24 @@ selected_concats = st.sidebar.multiselect("Изберете конкретен C
 # Apply Filters
 df_visible = df_total.copy()
 
-if show_unordered and show_excess:
-    # Show both problematic categories
-    df_visible = df_visible[(df_visible['Ordered_Qty'] == 0) | (df_visible['Remaining'] < 0)]
-elif show_unordered:
-    df_visible = df_visible[df_visible['Ordered_Qty'] == 0]
-elif show_excess:
-    df_visible = df_visible[(df_visible['Ordered_Qty'] > 0) & (df_visible['Remaining'] < 0)]
+# Logic for combining checkbox filters (OR logic if multiple selected to show inclusive sets, or specific? 
+# Usually users want to toggle visibility of specific groups. 
+# Let's make them additive: If ANY checkbox is checked, show items from those categories.
+# If NO checkbox is checked, show ALL (default behavior).
+# This is more intuitive for "Show me X" buttons.
+
+filter_mask = pd.Series([False] * len(df_visible))
+any_checkbox_active = show_unordered or show_excess or show_pending
+
+if any_checkbox_active:
+    if show_unordered:
+        filter_mask |= (df_visible['Ordered_Qty'] == 0)
+    if show_excess:
+        filter_mask |= ((df_visible['Ordered_Qty'] > 0) & (df_visible['Remaining'] < 0))
+    if show_pending:
+        filter_mask |= (df_visible['Remaining'] > 0)
+    
+    df_visible = df_visible[filter_mask]
 
 if search_text:
     df_visible = df_visible[df_visible['Concatenate'].astype(str).str.contains(search_text, case=False, na=False)]
