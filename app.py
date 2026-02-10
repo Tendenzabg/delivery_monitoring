@@ -207,8 +207,8 @@ if unordered_barcodes:
         })
     
     df_unordered = pd.DataFrame(data_unordered)
-    # Combine
-    df_total = pd.concat([df_order, df_unordered], ignore_index=True)
+    # Combine - Unordered items at the TOP
+    df_total = pd.concat([df_unordered, df_order], ignore_index=True)
 else:
     df_total = df_order.copy()
 
