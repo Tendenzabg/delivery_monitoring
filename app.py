@@ -28,10 +28,15 @@ def load_state():
     if os.path.exists(STATE_FILE):
         try:
             with open(STATE_FILE, 'r') as f:
-                return json.load(f)
+                state = json.load(f)
+                # Ensure structure is correct (migration for new feature)
+                if 'processed_files' not in state: state['processed_files'] = []
+                if 'delivery_data' not in state: state['delivery_data'] = {}
+                if 'delivery_meta' not in state: state['delivery_meta'] = {}
+                return state
         except:
             pass
-    return {'processed_files': [], 'delivery_data': {}} # delivery_data: {barcode: qty}
+    return {'processed_files': [], 'delivery_data': {}, 'delivery_meta': {}} 
 
 def save_state(state):
     with open(STATE_FILE, 'w') as f:
@@ -80,12 +85,32 @@ def process_delivery_file(uploaded_file, current_state):
             
         # Extract and Aggregate
         df['Barcode'] = df[COL_BARCODE_DELIV].astype(str).str.strip()
+        
+        # 1. Sum Quantities
         delivery_sums = df.groupby('Barcode')[COL_QTY_DELIV].sum().to_dict()
         
+        # 2. Extract Metadata (Concatenate, Description, SizeConverted)
+        # We take the first occurrence for each barcode
+        # Ensure these columns exist in delivery file before accessing
+        meta_cols = ['Concatenate', 'Description', 'SizeConverted']
+        available_meta_cols = [c for c in meta_cols if c in df.columns]
+        
+        if available_meta_cols:
+            delivery_meta = df.groupby('Barcode')[available_meta_cols].first().to_dict('index')
+        else:
+            delivery_meta = {}
+
         # Update State
         for barcode, qty in delivery_sums.items():
             current_state['delivery_data'][barcode] = current_state['delivery_data'].get(barcode, 0) + qty
             
+            # Store metadata if available
+            if barcode in delivery_meta:
+                # Merge existing meta with new (new wins or keep old? keep old usually better for stability, but let's overwrite to be fresh)
+                # Actually, check if we already have it
+                if barcode not in current_state['delivery_meta']:
+                     current_state['delivery_meta'][barcode] = delivery_meta[barcode]
+
         current_state['processed_files'].append(uploaded_file.name)
         save_state(current_state)
         st.success(f"Обработен {uploaded_file.name}")
@@ -149,11 +174,14 @@ if st.session_state.app_state['processed_files']:
 if st.sidebar.button("⚠️ Нулирай Всичко"):
     if os.path.exists(STATE_FILE):
         os.remove(STATE_FILE)
-    st.session_state.app_state = {'processed_files': [], 'delivery_data': {}}
+    st.session_state.app_state = {'processed_files': [], 'delivery_data': {}, 'delivery_meta': {}}
     st.rerun()
 
 # 5. Merge Data
 delivery_map = st.session_state.app_state['delivery_data']
+delivery_meta = st.session_state.app_state.get('delivery_meta', {})
+
+# Only map delivery quantities that correspond to ordered items here
 df_order['Delivered'] = df_order['Barcode'].map(delivery_map).fillna(0)
 df_order['Remaining'] = df_order['Ordered_Qty'] - df_order['Delivered']
 
@@ -166,11 +194,13 @@ if unordered_barcodes:
     data_unordered = []
     for bc in unordered_barcodes:
         qty = delivery_map[bc]
+        meta = delivery_meta.get(bc, {})
+        
         data_unordered.append({
             'Barcode': bc,
-            'Concatenate': 'ИЗВЪН ПОРЪЧКА', # EXTRA
-            'Description': 'Непоръчан артикул', # Unordered item
-            'SizeConverted': '-',
+            'Concatenate': meta.get('Concatenate', 'ИЗВЪН ПОРЪЧКА'),
+            'Description': meta.get('Description', 'Непоръчан артикул'),
+            'SizeConverted': meta.get('SizeConverted', '-'),
             'Ordered_Qty': 0,
             'Delivered': qty,
             'Remaining': -qty # Logical: 0 - Delivered
@@ -225,10 +255,25 @@ if selected_concats:
 
 # 8. Display Stats
 st.subheader("Общ Преглед")
-col1, col2, col3 = st.columns(3)
-col1.metric("Общо Поръчано", int(df_visible['Ordered_Qty'].sum()))
-col2.metric("Общо Доставено", int(df_visible['Delivered'].sum()))
-col3.metric("Оставащо", int(df_visible['Remaining'].sum()))
+
+# Calculate Valid Metrics
+# Total Ordered: Sum of Ordered_Qty (Unaffected by delivery)
+total_ordered = df_visible['Ordered_Qty'].sum()
+
+# Total Delivered (Planned): Sum of Delivered WHERE Ordered_Qty > 0
+total_delivered_planned = df_visible[df_visible['Ordered_Qty'] > 0]['Delivered'].sum()
+
+# Total Unordered: Sum of Delivered WHERE Ordered_Qty == 0
+total_unordered = df_visible[df_visible['Ordered_Qty'] == 0]['Delivered'].sum()
+
+# Pending: Sum of Remaining WHERE Ordered_Qty > 0 (Remaining for unordered is negative, we don't count it as pending)
+total_pending = df_visible[df_visible['Ordered_Qty'] > 0]['Remaining'].sum()
+
+col1, col2, col3, col4 = st.columns(4)
+col1.metric("Общо Поръчано", int(total_ordered))
+col2.metric("Доставено (Поръчано)", int(total_delivered_planned))
+col3.metric("⚠️ Извън поръчка", int(total_unordered))
+col4.metric("Оставащо", int(total_pending))
 
 st.subheader("Детален Статус")
 
