@@ -46,7 +46,7 @@ def load_initial_order(file_path_or_buffer):
         # Verify columns exist
         missing_cols = [c for c in COL_MAP_ORDER.keys() if c not in df.columns]
         if missing_cols:
-            st.error(f"Missing columns in Order file: {missing_cols}")
+            st.error(f"Липсващи колони във файла с поръчката: {missing_cols}")
             return pd.DataFrame()
         
         # Select and Rename
@@ -66,7 +66,7 @@ def load_initial_order(file_path_or_buffer):
         
         return df_clean
     except Exception as e:
-        st.error(f"Error loading Order file: {e}")
+        st.error(f"Грешка при зареждане на файла с поръчката: {e}")
         return pd.DataFrame()
 
 def process_delivery_file(uploaded_file, current_state):
@@ -75,7 +75,7 @@ def process_delivery_file(uploaded_file, current_state):
         
         # Check columns
         if COL_BARCODE_DELIV not in df.columns or COL_QTY_DELIV not in df.columns:
-            st.error(f"File {uploaded_file.name} missing required columns: {COL_BARCODE_DELIV}, {COL_QTY_DELIV}")
+            st.error(f"Файлът {uploaded_file.name} няма задължителни колони: {COL_BARCODE_DELIV}, {COL_QTY_DELIV}")
             return current_state
             
         # Extract and Aggregate
@@ -88,38 +88,38 @@ def process_delivery_file(uploaded_file, current_state):
             
         current_state['processed_files'].append(uploaded_file.name)
         save_state(current_state)
-        st.success(f"Processed {uploaded_file.name}")
+        st.success(f"Обработен {uploaded_file.name}")
         return current_state
         
     except Exception as e:
-        st.error(f"Error processing {uploaded_file.name}: {e}")
+        st.error(f"Грешка при обработка на {uploaded_file.name}: {e}")
         return current_state
 
 # --- Main App ---
-st.set_page_config(page_title="Merchandise Control", layout="wide")
-st.title("📦 Merchandise Arrival Control")
+st.set_page_config(page_title="Контрол на Стоките", layout="wide")
+st.title("📦 Контрол на Пристигащи Стоки")
 
 # 1. Load Order Data
-st.sidebar.header("📁 Step 1: Initial Order")
-order_file = st.sidebar.file_uploader("Upload 'Confirmation' File", type=['xlsx'])
+st.sidebar.header("📁 Стъпка 1: Първоначална Поръчка")
+order_file = st.sidebar.file_uploader("Качете файл 'Потвърждение'", type=['xlsx'])
 
 # Logic to handle persistence of the Order File
 if order_file:
     # Save the uploaded file locally to persist it
     with open(LOCAL_ORDER_PATH, "wb") as f:
         f.write(order_file.getbuffer())
-    st.sidebar.success("Order file saved successfully!")
+    st.sidebar.success("Файлът с поръчката е запазен успешно!")
     df_order = load_initial_order(order_file)
 elif os.path.exists(LOCAL_ORDER_PATH):
-    st.sidebar.info("Using previously uploaded Order file.")
+    st.sidebar.info("Използва се предишно качен файл с поръчка.")
     df_order = load_initial_order(LOCAL_ORDER_PATH)
 else:
-    st.info("👈 Please upload the 'Happy Sport - Nike SP26 - Confirmation.xlsx' file in the sidebar to start.")
+    st.info("👈 Моля, качете файла 'Happy Sport - Nike SP26 - Confirmation.xlsx' в страничната лента, за да започнете.")
     st.image("https://placehold.co/600x400?text=Waiting+for+Order+File", caption="Upload Verification File")
     st.stop()
 
 if df_order.empty:
-    st.warning("Failed to load valid order data.")
+    st.warning("Неуспешно зареждане на валидни данни за поръчка.")
     st.stop()
 
 # 2. Load State
@@ -128,25 +128,25 @@ if 'app_state' not in st.session_state:
 
 # 3. Sidebar - File Upload
 st.sidebar.markdown("---")
-st.sidebar.header("📥 Step 2: Upload Deliveries")
-uploaded_files = st.sidebar.file_uploader("Upload Delivery Excel(s)", type=['xlsx'], accept_multiple_files=True)
+st.sidebar.header("📥 Стъпка 2: Качване на Доставки")
+uploaded_files = st.sidebar.file_uploader("Качете Excel файл(ове) с доставки", type=['xlsx'], accept_multiple_files=True)
 
 if uploaded_files:
     for uploaded_file in uploaded_files:
         if uploaded_file.name not in st.session_state.app_state['processed_files']:
             st.session_state.app_state = process_delivery_file(uploaded_file, st.session_state.app_state)
         else:
-            st.sidebar.info(f"Skipped {uploaded_file.name} (already processed)")
+            st.sidebar.info(f"Пропуснат {uploaded_file.name} (вече е обработен)")
 
 # Show Processed Files History
 if st.session_state.app_state['processed_files']:
     st.sidebar.markdown("---")
-    st.sidebar.subheader("📚 Processed Files")
+    st.sidebar.subheader("📚 Обработени Файлове")
     for fname in st.session_state.app_state['processed_files']:
         st.sidebar.text(f"✅ {fname}")
 
 # 4. Sidebar - Reset
-if st.sidebar.button("⚠️ Reset All Progress"):
+if st.sidebar.button("⚠️ Нулирай Всичко"):
     if os.path.exists(STATE_FILE):
         os.remove(STATE_FILE)
     st.session_state.app_state = {'processed_files': [], 'delivery_data': {}}
@@ -167,14 +167,14 @@ def highlight_row(row):
 
 # 7. Filter
 st.sidebar.markdown("---")
-st.sidebar.header("🔍 Filter Data")
+st.sidebar.header("🔍 Филтриране на Данни")
 
 # Text Search
-search_text = st.sidebar.text_input("Search Concatenate (Text Match)")
+search_text = st.sidebar.text_input("Търсене по Concatenate (Текст)")
 
 # Multiselect
 all_concats = sorted(df_order['Concatenate'].dropna().unique().tolist())
-selected_concats = st.sidebar.multiselect("Select Specific Concatenate", options=all_concats)
+selected_concats = st.sidebar.multiselect("Изберете конкретен Concatenate", options=all_concats)
 
 # Apply Filters
 df_visible = df_order.copy()
@@ -186,21 +186,46 @@ if selected_concats:
     df_visible = df_visible[df_visible['Concatenate'].isin(selected_concats)]
 
 # 8. Display Stats
-st.subheader("Overview")
+st.subheader("Общ Преглед")
 col1, col2, col3 = st.columns(3)
-col1.metric("Total Ordered", int(df_visible['Ordered_Qty'].sum()))
-col2.metric("Total Delivered", int(df_visible['Delivered'].sum()))
-col3.metric("Pending", int(df_visible['Remaining'].sum()))
+col1.metric("Общо Поръчано", int(df_visible['Ordered_Qty'].sum()))
+col2.metric("Общо Доставено", int(df_visible['Delivered'].sum()))
+col3.metric("Оставащо", int(df_visible['Remaining'].sum()))
 
-st.subheader("Detailed Status")
+st.subheader("Детален Статус")
 
-# Column Order
-cols_to_show = ['Concatenate', 'SizeConverted', 'Description', 'Barcode', 'Ordered_Qty', 'Delivered', 'Remaining']
-df_display = df_visible[cols_to_show]
+# Maps columns to Bulgarian for display
+display_cols_map = {
+    'Concatenate': 'Concatenate',
+    'SizeConverted': 'Размер',
+    'Description': 'Описание',
+    'Barcode': 'Баркод',
+    'Ordered_Qty': 'Поръчано',
+    'Delivered': 'Доставено',
+    'Remaining': 'Оставащо'
+}
 
-# Apply Styling
+cols_to_show = list(display_cols_map.keys())
+df_display = df_visible[cols_to_show].rename(columns=display_cols_map)
+
+# Apply Styling (Logic still uses 'Remaining', but display uses 'Оставащо')
+# We need to apply style BEFORE renaming if we use column logic, 
+# OR adjust the highlight function to use the new name.
+# Easier to apply style to the original df_visible's subset, then rename? 
+# Streamlit dataframe properties are tricky. 
+# Let's adjust the highlight function to handle the original DF, 
+# but st.dataframe expects the styled object to match the display.
+# Strategy: Rename first, then style using new column names.
+
+def highlight_row_bg(row):
+    remaining = row['Оставащо']
+    if remaining <= 0:
+        return ['background-color: #d4edda; color: #155724'] * len(row) # Green
+    else:
+        return ['background-color: #fff3cd; color: #856404'] * len(row) # Yellow/Orange
+
 st.dataframe(
-    df_display.style.apply(highlight_row, axis=1),
+    df_display.style.apply(highlight_row_bg, axis=1),
     use_container_width=True,
     height=800
 )
