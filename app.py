@@ -226,7 +226,7 @@ def highlight_row_bg(row):
     
     # Red for Unordered (Ordered == 0)
     if ordered == 0:
-        return ['background-color: #f8d7da; color: #721c24'] * len(row) # Red
+        return ['background-color: #f8d7da; color: red; font-weight: bold'] * len(row) # Red Text
     # Purple/Blue for Excess (Ordered > 0 AND Remaining < 0)
     elif ordered > 0 and remaining < 0:
         return ['background-color: #cce5ff; color: #004085'] * len(row) # Blue
