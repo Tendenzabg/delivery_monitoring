@@ -157,11 +157,43 @@ delivery_map = st.session_state.app_state['delivery_data']
 df_order['Delivered'] = df_order['Barcode'].map(delivery_map).fillna(0)
 df_order['Remaining'] = df_order['Ordered_Qty'] - df_order['Delivered']
 
+# Handle Unordered Items (Items in delivery but not in order)
+ordered_barcodes = set(df_order['Barcode'])
+delivered_barcodes = set(delivery_map.keys())
+unordered_barcodes = list(delivered_barcodes - ordered_barcodes)
+
+if unordered_barcodes:
+    data_unordered = []
+    for bc in unordered_barcodes:
+        qty = delivery_map[bc]
+        data_unordered.append({
+            'Barcode': bc,
+            'Concatenate': 'ИЗВЪН ПОРЪЧКА', # EXTRA
+            'Description': 'Непоръчан артикул', # Unordered item
+            'SizeConverted': '-',
+            'Ordered_Qty': 0,
+            'Delivered': qty,
+            'Remaining': -qty # Logical: 0 - Delivered
+        })
+    
+    df_unordered = pd.DataFrame(data_unordered)
+    # Combine
+    df_total = pd.concat([df_order, df_unordered], ignore_index=True)
+else:
+    df_total = df_order.copy()
+
 # 6. Styling
-def highlight_row(row):
-    remaining = row['Remaining']
-    if remaining <= 0:
+def highlight_row_bg(row):
+    ordered = row['Поръчано']
+    remaining = row['Оставащо']
+    
+    # Red for Unordered (Ordered == 0)
+    if ordered == 0:
+        return ['background-color: #f8d7da; color: #721c24'] * len(row) # Red
+    # Green for Completed (Remaining <= 0)
+    elif remaining <= 0:
         return ['background-color: #d4edda; color: #155724'] * len(row) # Green
+    # Yellow for Pending
     else:
         return ['background-color: #fff3cd; color: #856404'] * len(row) # Yellow/Orange
 
@@ -169,15 +201,21 @@ def highlight_row(row):
 st.sidebar.markdown("---")
 st.sidebar.header("🔍 Филтриране на Данни")
 
+# Filter: Unordered Items
+show_unordered = st.sidebar.checkbox("⚠️ Покажи само непоръчани стоки", value=False)
+
 # Text Search
 search_text = st.sidebar.text_input("Търсене по Concatenate (Текст)")
 
 # Multiselect
-all_concats = sorted(df_order['Concatenate'].dropna().unique().tolist())
+all_concats = sorted(df_total['Concatenate'].dropna().unique().tolist())
 selected_concats = st.sidebar.multiselect("Изберете конкретен Concatenate", options=all_concats)
 
 # Apply Filters
-df_visible = df_order.copy()
+df_visible = df_total.copy()
+
+if show_unordered:
+    df_visible = df_visible[df_visible['Ordered_Qty'] == 0]
 
 if search_text:
     df_visible = df_visible[df_visible['Concatenate'].astype(str).str.contains(search_text, case=False, na=False)]
