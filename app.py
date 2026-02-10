@@ -7,6 +7,7 @@ import json
 # --- Configuration ---
 # State is saved locally in the running directory
 STATE_FILE = 'app_state.json'
+LOCAL_ORDER_PATH = 'saved_order.xlsx'
 
 # --- Header Mapping ---
 # Order File Columns -> App Columns
@@ -38,10 +39,10 @@ def save_state(state):
 
 # --- Data Loading ---
 @st.cache_data
-def load_initial_order(file_obj):
+def load_initial_order(file_path_or_buffer):
     # Header is at row index 1 (0-based) based on inspection
     try:
-        df = pd.read_excel(file_obj, header=1)
+        df = pd.read_excel(file_path_or_buffer, header=1)
         # Verify columns exist
         missing_cols = [c for c in COL_MAP_ORDER.keys() if c not in df.columns]
         if missing_cols:
@@ -102,12 +103,20 @@ st.title("📦 Merchandise Arrival Control")
 st.sidebar.header("📁 Step 1: Initial Order")
 order_file = st.sidebar.file_uploader("Upload 'Confirmation' File", type=['xlsx'])
 
-if not order_file:
+# Logic to handle persistence of the Order File
+if order_file:
+    # Save the uploaded file locally to persist it
+    with open(LOCAL_ORDER_PATH, "wb") as f:
+        f.write(order_file.getbuffer())
+    st.sidebar.success("Order file saved successfully!")
+    df_order = load_initial_order(order_file)
+elif os.path.exists(LOCAL_ORDER_PATH):
+    st.sidebar.info("Using previously uploaded Order file.")
+    df_order = load_initial_order(LOCAL_ORDER_PATH)
+else:
     st.info("👈 Please upload the 'Happy Sport - Nike SP26 - Confirmation.xlsx' file in the sidebar to start.")
     st.image("https://placehold.co/600x400?text=Waiting+for+Order+File", caption="Upload Verification File")
     st.stop()
-
-df_order = load_initial_order(order_file)
 
 if df_order.empty:
     st.warning("Failed to load valid order data.")
