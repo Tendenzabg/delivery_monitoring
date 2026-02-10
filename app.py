@@ -4,9 +4,9 @@ import os
 import json
 
 # --- Configuration ---
-DATA_DIR = '/Users/stoyantodorov/Downloads/Consegne Happy - Sporttime'
-ORDER_FILE = os.path.join(DATA_DIR, 'Happy Sport - Nike SP26 - Confirmation.xlsx')
-STATE_FILE = os.path.join(DATA_DIR, 'app_state.json')
+# --- Configuration ---
+# State is saved locally in the running directory
+STATE_FILE = 'app_state.json'
 
 # --- Header Mapping ---
 # Order File Columns -> App Columns
@@ -38,10 +38,10 @@ def save_state(state):
 
 # --- Data Loading ---
 @st.cache_data
-def load_initial_order(file_path):
+def load_initial_order(file_obj):
     # Header is at row index 1 (0-based) based on inspection
     try:
-        df = pd.read_excel(file_path, header=1)
+        df = pd.read_excel(file_obj, header=1)
         # Verify columns exist
         missing_cols = [c for c in COL_MAP_ORDER.keys() if c not in df.columns]
         if missing_cols:
@@ -99,10 +99,18 @@ st.set_page_config(page_title="Merchandise Control", layout="wide")
 st.title("📦 Merchandise Arrival Control")
 
 # 1. Load Order Data
-df_order = load_initial_order(ORDER_FILE)
+st.sidebar.header("📁 Step 1: Initial Order")
+order_file = st.sidebar.file_uploader("Upload 'Confirmation' File", type=['xlsx'])
+
+if not order_file:
+    st.info("👈 Please upload the 'Happy Sport - Nike SP26 - Confirmation.xlsx' file in the sidebar to start.")
+    st.image("https://placehold.co/600x400?text=Waiting+for+Order+File", caption="Upload Verification File")
+    st.stop()
+
+df_order = load_initial_order(order_file)
 
 if df_order.empty:
-    st.warning("Please ensure the 'Confirmation' file is in the correct directory.")
+    st.warning("Failed to load valid order data.")
     st.stop()
 
 # 2. Load State
@@ -110,8 +118,9 @@ if 'app_state' not in st.session_state:
     st.session_state.app_state = load_state()
 
 # 3. Sidebar - File Upload
-st.sidebar.header("📥 Upload Deliveries")
-uploaded_files = st.sidebar.file_uploader("Upload Delivery Excel", type=['xlsx'], accept_multiple_files=True)
+st.sidebar.markdown("---")
+st.sidebar.header("📥 Step 2: Upload Deliveries")
+uploaded_files = st.sidebar.file_uploader("Upload Delivery Excel(s)", type=['xlsx'], accept_multiple_files=True)
 
 if uploaded_files:
     for uploaded_file in uploaded_files:
