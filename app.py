@@ -229,7 +229,7 @@ def highlight_row_bg(row):
         return ['background-color: #f8d7da; color: red; font-weight: bold'] * len(row) # Red Text
     # Purple/Blue for Excess (Ordered > 0 AND Remaining < 0)
     elif ordered > 0 and remaining < 0:
-        return ['background-color: #cce5ff; color: #004085'] * len(row) # Blue
+        return ['background-color: #d4edda; color: #155724'] * len(row) # Green (Excess)
     # Green for Completed (Remaining == 0) - Note: Remaining <= 0 covered Excess before, so strict check needed
     elif remaining == 0:
         return ['background-color: #d4edda; color: #155724'] * len(row) # Green
@@ -243,7 +243,7 @@ st.sidebar.header("🔍 Филтриране на Данни")
 
 # Filter: Special Categories
 show_unordered = st.sidebar.checkbox("⚠️ Покажи ИЗВЪН поръчка (Red)", value=False)
-show_excess = st.sidebar.checkbox("📈 Покажи НАДВИШЕНИ количества (Blue)", value=False)
+show_excess = st.sidebar.checkbox("📈 Покажи НАДВИШЕНИ количества (Green)", value=False)
 show_pending = st.sidebar.checkbox("📉 Покажи НЕДОСТАВЕНИ (Yellow)", value=False)
 
 # Text Search
