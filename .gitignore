@@ -1,0 +1,18 @@
+# Ambiente virtuale Python
+.venv/
+__pycache__/
+*.pyc
+
+# Stato e file temporanei dell'applicazione Streamlit
+app_state.json
+saved_order.xlsx
+*.xlsx
+
+# File di configurazione e credenziali sensibili
+.env
+
+# Cartella di output (log, csv, immagini)
+output/
+
+# File di sistema macOS
+.DS_Store

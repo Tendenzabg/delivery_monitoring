@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import os
 import json
+import datetime
 
 # --- Configuration ---
 # --- Configuration ---
@@ -22,6 +23,36 @@ COL_MAP_ORDER = {
 # Delivery File Columns
 COL_BARCODE_DELIV = 'Barcode'
 COL_QTY_DELIV = 'Dlv.qty'
+
+# --- Logging Helper ---
+def scrivi_log(messaggio):
+    """
+    Scrive un messaggio nel file di log 'output/log.txt' con data e ora.
+    Crea la cartella 'output' se non esiste.
+    
+    Parametri:
+        messaggio (str): Il messaggio descrittivo dell'errore da registrare.
+        
+    Ritorna:
+        None
+    """
+    try:
+        # Nome della cartella di output
+        cartella_output = 'output'
+        # Se la cartella di output non esiste, la crea
+        if not os.path.exists(cartella_output):
+            os.makedirs(cartella_output)
+        # Percorso completo del file di log
+        percorso_log = os.path.join(cartella_output, 'log.txt')
+        # Ottiene la data e l'ora corrente formattata come stringa
+        timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        # Apre il file in modalità append con codifica UTF-8
+        with open(percorso_log, 'a', encoding='utf-8') as file_log:
+            # Scrive la riga di log con data, ora e il messaggio
+            file_log.write(f"[{timestamp}] {messaggio}\n")
+    except Exception as e_log:
+        # Stampa l'errore a schermo solo in caso di fallimento della scrittura su file
+        print(f"Impossibile scrivere il log: {e_log}")
 
 # --- State Management ---
 def load_state():
@@ -45,23 +76,49 @@ def save_state(state):
 # --- Data Loading ---
 @st.cache_data
 def load_initial_order(file_path_or_buffer):
-    # Header is at row index 1 (0-based) based on inspection
+    """
+    Carica e pulisce il file dell'ordine iniziale ("Conferma").
+    Gestisce sia il file grezzo del fornitore (header riga 1) sia quello già salvato (header riga 0).
+    
+    Parametri:
+        file_path_or_buffer (str o file-like): Il percorso del file o il buffer del file caricato.
+        
+    Ritorna:
+        pd.DataFrame: Il dataframe pulito e aggregato per codice a barre.
+    """
+    # Blocco try/except per catturare eventuali errori durante la lettura dei file
     try:
+        # Legge il file con header alla riga 0 per verificare se si tratta del file pulito e già salvato in locale
+        df_primo_tentativo = pd.read_excel(file_path_or_buffer, header=0)
+        # Elenco delle colonne richieste nel file d'ordine pulito e standardizzato
+        colonne_pulite = ['Barcode', 'Concatenate', 'Description', 'SizeConverted', 'Ordered_Qty']
+        # Verifica se tutte le colonne pulite sono presenti nel dataframe letto al primo tentativo
+        if all(col in df_primo_tentativo.columns for col in colonne_pulite):
+            # Converte la colonna Barcode in stringa ed elimina gli spazi bianchi iniziali e finali
+            df_primo_tentativo['Barcode'] = df_primo_tentativo['Barcode'].astype(str).str.strip()
+            # Ritorna il dataframe già formattato
+            return df_primo_tentativo
+        
+        # Se non è un file pulito salvato, legge il file originale del fornitore con header alla riga 1
         df = pd.read_excel(file_path_or_buffer, header=1)
-        # Verify columns exist
-        missing_cols = [c for c in COL_MAP_ORDER.keys() if c not in df.columns]
-        if missing_cols:
-            st.error(f"Липсващи колони във файла с поръчката: {missing_cols}")
+        # Controlla se ci sono colonne obbligatorie mancanti rispetto a quelle mappate
+        colonne_mancanti = [c for c in COL_MAP_ORDER.keys() if c not in df.columns]
+        # Se ci sono colonne mancanti
+        if colonne_mancanti:
+            # Mostra un messaggio di errore all'utente Streamlit in lingua bulgara
+            st.error(f"Липсващи колони във файла с поръчката: {colonne_mancanti}")
+            # Registra l'errore nel file di log in italiano
+            scrivi_log(f"Errore caricamento ordine: Colonne mancanti {colonne_mancanti}")
+            # Ritorna un dataframe vuoto per interrompere l'elaborazione del file errato
             return pd.DataFrame()
         
-        # Select and Rename
+        # Filtra solo le colonne necessarie e le rinomina usando la mappatura standard
         df_clean = df[list(COL_MAP_ORDER.keys())].rename(columns=COL_MAP_ORDER)
         
-        # Ensure Barcode is string for matching
+        # Forza la colonna Barcode a tipo stringa e rimuove gli spazi per garantire corrispondenza corretta
         df_clean['Barcode'] = df_clean['Barcode'].astype(str).str.strip()
         
-        # Group by Barcode to handle duplicates in order file (if any)
-        # User said EAN UPC Cd is Primary Key, but let's be safe
+        # Raggruppa per codice a barre (Barcode) per sommare le quantità ed evitare righe duplicate
         df_clean = df_clean.groupby('Barcode', as_index=False).agg({
             'Concatenate': 'first',
             'Description': 'first',
@@ -69,9 +126,15 @@ def load_initial_order(file_path_or_buffer):
             'Ordered_Qty': 'sum'
         })
         
+        # Ritorna il dataframe dell'ordine elaborato e pulito
         return df_clean
+    # Gestione delle eccezioni generiche
     except Exception as e:
+        # Mostra l'errore nell'interfaccia utente in lingua bulgara
         st.error(f"Грешка при зареждане на файла с поръчката: {e}")
+        # Scrive l'eccezione riscontrata nel file log in lingua italiana
+        scrivi_log(f"Eccezione durante il caricamento del file dell'ordine: {str(e)}")
+        # Ritorna un dataframe vuoto
         return pd.DataFrame()
 
 def process_delivery_file(uploaded_file, current_state):
@@ -118,33 +181,81 @@ def process_delivery_file(uploaded_file, current_state):
         
     except Exception as e:
         st.error(f"Грешка при обработка на {uploaded_file.name}: {e}")
+        # Registra l'errore riscontrato durante l'elaborazione del file di consegna nel log
+        scrivi_log(f"Errore nell'elaborazione del file di consegna {uploaded_file.name}: {str(e)}")
         return current_state
 
 # --- Main App ---
 st.set_page_config(page_title="Контрол на Стоките", layout="wide")
 st.title("📦 Контрол на Пристигащи Стоки")
 
-# 1. Load Order Data
+# 1. Carica i dati dell'ordine (Step 1)
+# Titolo della sezione dell'ordine nella barra laterale (bulgaro)
 st.sidebar.header("📁 Стъпка 1: Първоначална Поръчка")
-order_file = st.sidebar.file_uploader("Качете файл 'Потвърждение'", type=['xlsx'])
+# Consente il caricamento di file multipli di conferma impostando accept_multiple_files=True
+order_files = st.sidebar.file_uploader("Качете файл(ове) 'Потвърждение'", type=['xlsx'], accept_multiple_files=True)
 
-# Logic to handle persistence of the Order File
-if order_file:
-    # Save the uploaded file locally to persist it
-    with open(LOCAL_ORDER_PATH, "wb") as f:
-        f.write(order_file.getbuffer())
-    st.sidebar.success("Файлът с поръчката е запазен успешно!")
-    df_order = load_initial_order(order_file)
+# Inizializza il dataframe per i dati dell'ordine
+df_order = pd.DataFrame()
+
+# Se l'utente ha caricato uno o più file dell'ordine
+if order_files:
+    # Crea una lista temporanea per raccogliere i dataframe puliti di ciascun file
+    lista_df_ordini = []
+    # Iteriamo su ciascun file caricato
+    for file_ordine in order_files:
+        # Carica il singolo file dell'ordine pulendone le colonne
+        df_singolo = load_initial_order(file_ordine)
+        # Se il dataframe del file corrente non è vuoto
+        if not df_singolo.empty:
+            # Lo aggiunge alla lista dei dataframe caricati
+            lista_df_ordini.append(df_singolo)
+    
+    # Se abbiamo caricato con successo almeno un file valido
+    if lista_df_ordini:
+        # Unisce tutti i dataframe degli ordini caricati in un unico dataframe cumulativo
+        df_combinato = pd.concat(lista_df_ordini, ignore_index=True)
+        # Raggruppa per codice a barre (Barcode) per sommare le quantità ed eliminare i doppioni tra file
+        df_order = df_combinato.groupby('Barcode', as_index=False).agg({
+            'Concatenate': 'first',
+            'Description': 'first',
+            'SizeConverted': 'first',
+            'Ordered_Qty': 'sum'
+        })
+        # Blocco try/except per salvare il dataframe combinato in locale
+        try:
+            # Salva il dataframe dell'ordine combinato come file Excel locale in sovrascrittura
+            df_order.to_excel(LOCAL_ORDER_PATH, index=False)
+            # Mostra messaggio di successo all'utente Streamlit in lingua bulgara
+            st.sidebar.success("Файловете с поръчки са обединени и запазени успешно!")
+        # Gestione di errori nel salvataggio del file Excel
+        except Exception as e_salva:
+            # Registra l'errore di scrittura locale nel log in italiano
+            scrivi_log(f"Impossibile salvare il file combinato dell'ordine locale: {e_salva}")
+            # Mostra avviso in lingua bulgara all'utente
+            st.sidebar.warning("Грешка при локално запазване на обединения файл.")
+
+# Se non ci sono file appena caricati, controlla se esiste una versione unita salvata in locale
 elif os.path.exists(LOCAL_ORDER_PATH):
+    # Mostra messaggio informativo in lingua bulgara indicando l'uso del file salvato
     st.sidebar.info("Използва се предишно качен файл с поръчка.")
+    # Carica i dati dell'ordine dal file locale (essendo pre-pulito verrà riconosciuto da load_initial_order)
     df_order = load_initial_order(LOCAL_ORDER_PATH)
+
+# Se non ci sono file caricati e non c'è alcun file salvato locale su cui appoggiarsi
 else:
-    st.info("👈 Моля, качете файла 'Happy Sport - Nike SP26 - Confirmation.xlsx' в страничната лента, за да започнете.")
+    # Mostra messaggio informativo in bulgaro che invita a caricare i file per iniziare
+    st.info("👈 Моля, качете файл(ове) 'Потвърждение' в страничната лента, за да започнете.")
+    # Visualizza un'immagine segnaposto per indicare l'attesa del file
     st.image("https://placehold.co/600x400?text=Waiting+for+Order+File", caption="Upload Verification File")
+    # Ferma l'esecuzione dello script Streamlit finché non viene caricato un file
     st.stop()
 
+# Se il dataframe dell'ordine combinato è comunque vuoto (es. file non validi o errori di parsing)
 if df_order.empty:
+    # Mostra un messaggio di avviso in lingua bulgara
     st.warning("Неуспешно зареждане на валидни данни за поръчка.")
+    # Ferma l'esecuzione di Streamlit
     st.stop()
 
 # 2. Load State
@@ -170,11 +281,19 @@ if st.session_state.app_state['processed_files']:
     for fname in st.session_state.app_state['processed_files']:
         st.sidebar.text(f"✅ {fname}")
 
-# 4. Sidebar - Reset
+# 4. Sidebar - Pulsante per azzerare e resettare lo stato e i file salvati
 if st.sidebar.button("⚠️ Нулирай Всичко"):
+    # Se il file dello stato cumulativo delle consegne esiste su disco
     if os.path.exists(STATE_FILE):
+        # Elimina il file dello stato
         os.remove(STATE_FILE)
+    # Se il file Excel dell'ordine locale salvato esiste su disco
+    if os.path.exists(LOCAL_ORDER_PATH):
+        # Elimina il file dell'ordine
+        os.remove(LOCAL_ORDER_PATH)
+    # Ripristina lo stato iniziale dell'applicazione all'interno della sessione di Streamlit
     st.session_state.app_state = {'processed_files': [], 'delivery_data': {}, 'delivery_meta': {}}
+    # Esegue il rerun dell'applicazione per caricare la pagina aggiornata
     st.rerun()
 
 # 5. Merge Data
