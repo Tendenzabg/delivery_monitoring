@@ -56,22 +56,152 @@ def scrivi_log(messaggio):
 
 # --- State Management ---
 def load_state():
-    if os.path.exists(STATE_FILE):
-        try:
-            with open(STATE_FILE, 'r') as f:
-                state = json.load(f)
-                # Ensure structure is correct (migration for new feature)
-                if 'processed_files' not in state: state['processed_files'] = []
-                if 'delivery_data' not in state: state['delivery_data'] = {}
-                if 'delivery_meta' not in state: state['delivery_meta'] = {}
-                return state
-        except:
-            pass
-    return {'processed_files': [], 'delivery_data': {}, 'delivery_meta': {}} 
+    """
+    Carica lo stato dell'applicazione dal file JSON locale.
+    Se il file non esiste o è corrotto, restituisce lo stato iniziale vuoto.
+    
+    Ritorna:
+        dict: Lo stato dell'applicazione con tutte le chiavi necessarie.
+    """
+    try:
+        # Se il file dello stato esiste su disco
+        if os.path.exists(STATE_FILE):
+            # Apriamo il file JSON in modalità lettura
+            with open(STATE_FILE, 'r', encoding='utf-8') as file_stato:
+                stato = json.load(file_stato)
+                # Assicuriamo che tutte le liste e i dizionari per consegne e ordini siano presenti (migrazione e stabilità)
+                if 'processed_files' not in stato: stato['processed_files'] = []
+                if 'delivery_data' not in stato: stato['delivery_data'] = {}
+                if 'delivery_meta' not in stato: stato['delivery_meta'] = {}
+                if 'processed_order_files' not in stato: stato['processed_order_files'] = []
+                if 'order_data' not in stato: stato['order_data'] = {}
+                if 'order_meta' not in stato: stato['order_meta'] = {}
+                # Ritorna lo stato caricato e validato
+                return stato
+    except Exception as e_carica_stato:
+        # Logga l'errore in italiano
+        scrivi_log(f"Errore nel caricamento dello stato dell'app: {e_carica_stato}")
+    # In caso di errore o se il file non esiste, ritorna lo schema vuoto iniziale
+    return {
+        'processed_files': [],
+        'delivery_data': {},
+        'delivery_meta': {},
+        'processed_order_files': [],
+        'order_data': {},
+        'order_meta': {}
+    }
 
 def save_state(state):
     with open(STATE_FILE, 'w') as f:
         json.dump(state, f)
+
+def process_order_file(uploaded_file, stato_corrente):
+    """
+    Elabora un singolo file Excel di conferma dell'ordine ("Потвърждение"),
+    estrae e pulisce i dati relativi alle quantità ordinate e ai metadati
+    e li somma/accumula nello stato dell'applicazione.
+    
+    Parametri:
+        uploaded_file: Il file Excel caricato da Streamlit.
+        stato_corrente (dict): Lo stato corrente dell'applicazione.
+        
+    Ritorna:
+        dict: Lo stato dell'applicazione aggiornato con i nuovi dati dell'ordine.
+    """
+    try:
+        # Legge il file dell'ordine con l'intestazione posizionata alla riga 1 (seconda riga)
+        dataframe_grezzo = pd.read_excel(uploaded_file, header=1)
+        
+        # Controlla quali colonne richieste mancano nel file caricato
+        colonne_mancanti = [c for c in COL_MAP_ORDER.keys() if c not in dataframe_grezzo.columns]
+        # Se ci sono colonne obbligatorie mancanti
+        if colonne_mancanti:
+            # Mostra una notifica di errore in bulgaro all'utente
+            st.error(f"Файлът {uploaded_file.name} няма задължителни колони: {colonne_mancanti}")
+            # Salva l'evento nel file di log in italiano
+            scrivi_log(f"Errore caricamento ordine {uploaded_file.name}: colonne mancanti {colonne_mancanti}")
+            # Ritorna lo stato senza modifiche
+            return stato_corrente
+            
+        # Seleziona solo le colonne di interesse e le rinomina con i nomi standard
+        dataframe_pulito = dataframe_grezzo[list(COL_MAP_ORDER.keys())].rename(columns=COL_MAP_ORDER)
+        
+        # Converte la colonna dei codici a barre in stringa e rimuove eventuali spazi bianchi ai lati
+        dataframe_pulito['Barcode'] = dataframe_pulito['Barcode'].astype(str).str.strip()
+        
+        # Somma le quantità ordinate raggruppando per codice a barre per questo specifico file
+        somme_barcode = dataframe_pulito.groupby('Barcode')['Ordered_Qty'].sum().to_dict()
+        
+        # Estrae i metadati descrittivi associati a ciascun codice a barre (prima occorrenza per ogni barcode)
+        colonne_metadati = ['Concatenate', 'Description', 'SizeConverted']
+        metadati_barcode = dataframe_pulito.groupby('Barcode')[colonne_metadati].first().to_dict('index')
+        
+        # Cicla sulle quantità ordinate estratte dal file corrente
+        for codice_a_barre, quantita in somme_barcode.items():
+            # Aggiunge/somma la quantità a quella già eventualmente presente nello stato cumulativo
+            stato_corrente['order_data'][codice_a_barre] = stato_corrente['order_data'].get(codice_a_barre, 0) + quantita
+            
+            # Se ci sono metadati associati a questo codice a barre nel file corrente
+            if codice_a_barre in metadati_barcode:
+                # Memorizza o aggiorna i metadati nello stato
+                stato_corrente['order_meta'][codice_a_barre] = metadati_barcode[codice_a_barre]
+                
+        # Aggiunge il nome del file all'elenco dei file d'ordine già elaborati nello stato
+        stato_corrente['processed_order_files'].append(uploaded_file.name)
+        
+        # Salva lo stato aggiornato su file JSON locale
+        save_state(stato_corrente)
+        # Mostra messaggio di successo all'utente Streamlit in lingua bulgara
+        st.success(f"Обработен {uploaded_file.name} (Потвърждение)")
+        # Ritorna lo stato aggiornato
+        return stato_corrente
+        
+    except Exception as errore_lettura:
+        # Mostra un messaggio di errore a schermo in bulgaro
+        st.error(f"Грешка при обработка на {uploaded_file.name}: {errore_lettura}")
+        # Registra il dettaglio dell'eccezione riscontrata nel file log in italiano
+        scrivi_log(f"Errore nella lettura del file d'ordine {uploaded_file.name}: {str(errore_lettura)}")
+        # Ritorna lo stato corrente inalterato
+        return stato_corrente
+
+def genera_df_ordine_da_stato(stato_corrente):
+    """
+    Costruisce e restituisce un DataFrame pandas aggregato a partire dalle
+    informazioni sull'ordine memorizzate nello stato corrente dell'applicazione.
+    
+    Parametri:
+        stato_corrente (dict): Lo stato corrente dell'applicazione.
+        
+    Ritorna:
+        pd.DataFrame: Il DataFrame dell'ordine consolidato pronto per il confronto.
+    """
+    try:
+        # Verifica se lo stato contiene dati dell'ordine
+        if not stato_corrente.get('order_data'):
+            # Ritorna un dataframe vuoto se non c'è nulla registrato
+            return pd.DataFrame()
+            
+        lista_righe = []
+        # Cicla su ciascun codice a barre registrato nello stato dell'ordine
+        for codice_a_barre, quantita in stato_corrente['order_data'].items():
+            # Recupera i metadati descrittivi associati a questo codice a barre
+            metadati = stato_corrente['order_meta'].get(codice_a_barre, {})
+            # Aggiunge un dizionario rappresentante la riga del dataframe alla lista temporanea
+            lista_righe.append({
+                'Barcode': codice_a_barre,
+                'Concatenate': metadati.get('Concatenate', 'SCONOSCIUTO'),
+                'Description': metadati.get('Description', 'Articolo d\'ordine cumulato'),
+                'SizeConverted': metadati.get('SizeConverted', '-'),
+                'Ordered_Qty': quantita
+            })
+            
+        # Ritorna il dataframe creato a partire dall'elenco di righe
+        return pd.DataFrame(lista_righe)
+    except Exception as errore_generazione:
+        # Scrive l'errore riscontrato nel log in italiano
+        scrivi_log(f"Errore nella generazione del DataFrame dell'ordine dallo stato: {errore_generazione}")
+        # Ritorna un dataframe vuoto
+        return pd.DataFrame()
 
 # --- Data Loading ---
 @st.cache_data
@@ -189,60 +319,77 @@ def process_delivery_file(uploaded_file, current_state):
 st.set_page_config(page_title="Контрол на Стоките", layout="wide")
 st.title("📦 Контрол на Пристигащи Стоки")
 
+# Inizializziamo lo stato dell'applicazione se non è già presente nella sessione di Streamlit (caricato subito)
+if 'app_state' not in st.session_state:
+    st.session_state.app_state = load_state()
+
 # 1. Carica i dati dell'ordine (Step 1)
 # Titolo della sezione dell'ordine nella barra laterale (bulgaro)
 st.sidebar.header("📁 Стъпка 1: Първоначална Поръчка")
 # Consente il caricamento di file multipli di conferma impostando accept_multiple_files=True
 order_files = st.sidebar.file_uploader("Качете файл(ове) 'Потвърждение'", type=['xlsx'], accept_multiple_files=True)
 
-# Inizializza il dataframe per i dati dell'ordine
-df_order = pd.DataFrame()
-
-# Se l'utente ha caricato uno o più file dell'ordine
+# Se l'utente ha inserito uno o più file dell'ordine
 if order_files:
-    # Crea una lista temporanea per raccogliere i dataframe puliti di ciascun file
-    lista_df_ordini = []
+    # Flag per verificare se abbiamo processato nuovi file non ancora registrati
+    nuovi_file_processati = False
     # Iteriamo su ciascun file caricato
     for file_ordine in order_files:
-        # Carica il singolo file dell'ordine pulendone le colonne
-        df_singolo = load_initial_order(file_ordine)
-        # Se il dataframe del file corrente non è vuoto
-        if not df_singolo.empty:
-            # Lo aggiunge alla lista dei dataframe caricati
-            lista_df_ordini.append(df_singolo)
-    
-    # Se abbiamo caricato con successo almeno un file valido
-    if lista_df_ordini:
-        # Unisce tutti i dataframe degli ordini caricati in un unico dataframe cumulativo
-        df_combinato = pd.concat(lista_df_ordini, ignore_index=True)
-        # Raggruppa per codice a barre (Barcode) per sommare le quantità ed eliminare i doppioni tra file
-        df_order = df_combinato.groupby('Barcode', as_index=False).agg({
-            'Concatenate': 'first',
-            'Description': 'first',
-            'SizeConverted': 'first',
-            'Ordered_Qty': 'sum'
-        })
-        # Blocco try/except per salvare il dataframe combinato in locale
-        try:
-            # Salva il dataframe dell'ordine combinato come file Excel locale in sovrascrittura
-            df_order.to_excel(LOCAL_ORDER_PATH, index=False)
-            # Mostra messaggio di successo all'utente Streamlit in lingua bulgara
-            st.sidebar.success("Файловете с поръчки са обединени и запазени успешно!")
-        # Gestione di errori nel salvataggio del file Excel
-        except Exception as e_salva:
-            # Registra l'errore di scrittura locale nel log in italiano
-            scrivi_log(f"Impossibile salvare il file combinato dell'ordine locale: {e_salva}")
-            # Mostra avviso in lingua bulgara all'utente
-            st.sidebar.warning("Грешка при локално запазване на обединения файл.")
+        # Se il file non è già presente nella lista dei file di conferma elaborati
+        if file_ordine.name not in st.session_state.app_state['processed_order_files']:
+            # Elabora il file dell'ordine e aggiorna lo stato cumulativo
+            st.session_state.app_state = process_order_file(file_ordine, st.session_state.app_state)
+            # Segnala che c'è stato almeno un nuovo inserimento
+            nuovi_file_processati = True
+        else:
+            # Informa l'utente che il file è già stato elaborato in precedenza
+            st.sidebar.info(f"Пропуснат {file_ordine.name} (вече е обработен)")
+            
+    # Se sono stati aggiunti nuovi dati all'ordine in questo ciclo
+    if nuovi_file_processati:
+        # Rigeneriamo il DataFrame cumulativo dallo stato aggiornato
+        df_consolidato = genera_df_ordine_da_stato(st.session_state.app_state)
+        # Se il DataFrame non è vuoto, lo salviamo in locale su file Excel
+        if not df_consolidato.empty:
+            try:
+                # Salva il file consolidato aggiornato
+                df_consolidato.to_excel(LOCAL_ORDER_PATH, index=False)
+            except Exception as e_salva_excel:
+                # Logga l'errore in italiano
+                scrivi_log(f"Impossibile salvare il file consolidato Excel in locale: {e_salva_excel}")
 
-# Se non ci sono file appena caricati, controlla se esiste una versione unita salvata in locale
+# Se non ci sono file appena inseriti nel file uploader ma lo stato contiene dati dell'ordine
+if st.session_state.app_state.get('order_data'):
+    # Genera il DataFrame direttamente dallo stato per essere confrontato
+    df_order = genera_df_ordine_da_stato(st.session_state.app_state)
+
+# Se lo stato dell'ordine è vuoto ma esiste il file Excel locale (recupero/persistenza all'avvio)
 elif os.path.exists(LOCAL_ORDER_PATH):
     # Mostra messaggio informativo in lingua bulgara indicando l'uso del file salvato
     st.sidebar.info("Използва се предишно качен файл с поръчка.")
-    # Carica i dati dell'ordine dal file locale (essendo pre-pulito verrà riconosciuto da load_initial_order)
-    df_order = load_initial_order(LOCAL_ORDER_PATH)
+    # Carica i dati dell'ordine dal file Excel locale consolidato
+    df_recuperato = load_initial_order(LOCAL_ORDER_PATH)
+    # Se il caricamento è andato a buon fine
+    if not df_recuperato.empty:
+        # Ripopoliamo lo stato con i dati letti dal file Excel locale
+        for _, riga in df_recuperato.iterrows():
+            bc = str(riga['Barcode']).strip()
+            qta = riga['Ordered_Qty']
+            st.session_state.app_state['order_data'][bc] = qta
+            st.session_state.app_state['order_meta'][bc] = {
+                'Concatenate': riga['Concatenate'],
+                'Description': riga['Description'],
+                'SizeConverted': riga['SizeConverted']
+            }
+        # Aggiungiamo un nome fittizio se non presente per indicare l'avvenuto recupero
+        if "saved_order.xlsx" not in st.session_state.app_state['processed_order_files']:
+            st.session_state.app_state['processed_order_files'].append("saved_order.xlsx")
+        # Salviamo lo stato aggiornato su file JSON
+        save_state(st.session_state.app_state)
+    # Assegna il DataFrame recuperato a df_order
+    df_order = df_recuperato
 
-# Se non ci sono file caricati e non c'è alcun file salvato locale su cui appoggiarsi
+# Se lo stato dell'ordine è vuoto e non c'è nessun file Excel locale da recuperare
 else:
     # Mostra messaggio informativo in bulgaro che invita a caricare i file per iniziare
     st.info("👈 Моля, качете файл(ове) 'Потвърждение' в страничната лента, за да започнете.")
@@ -251,16 +398,15 @@ else:
     # Ferma l'esecuzione dello script Streamlit finché non viene caricato un file
     st.stop()
 
-# Se il dataframe dell'ordine combinato è comunque vuoto (es. file non validi o errori di parsing)
+# Se il dataframe dell'ordine consolidato è comunque vuoto (es. file non validi o errori di parsing)
 if df_order.empty:
     # Mostra un messaggio di avviso in lingua bulgara
     st.warning("Неуспешно зареждане на валидни данни за поръчка.")
     # Ferma l'esecuzione di Streamlit
     st.stop()
 
-# 2. Load State
-if 'app_state' not in st.session_state:
-    st.session_state.app_state = load_state()
+# 2. Lo stato dell'applicazione è già caricato all'inizio del file
+pass
 
 # 3. Sidebar - File Upload
 st.sidebar.markdown("---")
@@ -273,6 +419,15 @@ if uploaded_files:
             st.session_state.app_state = process_delivery_file(uploaded_file, st.session_state.app_state)
         else:
             st.sidebar.info(f"Пропуснат {uploaded_file.name} (вече е обработен)")
+
+# Mostra la cronologia dei file d'ordine elaborati (Потвърждение)
+if st.session_state.app_state.get('processed_order_files'):
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("📚 Обработени Поръчки")
+    for nome_file in st.session_state.app_state['processed_order_files']:
+        # Esclude la visualizzazione del file di ripristino locale fittizio per pulizia visiva
+        if nome_file != "saved_order.xlsx":
+            st.sidebar.text(f"✅ {nome_file}")
 
 # Show Processed Files History
 if st.session_state.app_state['processed_files']:
@@ -291,8 +446,15 @@ if st.sidebar.button("⚠️ Нулирай Всичко"):
     if os.path.exists(LOCAL_ORDER_PATH):
         # Elimina il file dell'ordine
         os.remove(LOCAL_ORDER_PATH)
-    # Ripristina lo stato iniziale dell'applicazione all'interno della sessione di Streamlit
-    st.session_state.app_state = {'processed_files': [], 'delivery_data': {}, 'delivery_meta': {}}
+    # Ripristina lo stato iniziale completo dell'applicazione all'interno della sessione di Streamlit
+    st.session_state.app_state = {
+        'processed_files': [],
+        'delivery_data': {},
+        'delivery_meta': {},
+        'processed_order_files': [],
+        'order_data': {},
+        'order_meta': {}
+    }
     # Esegue il rerun dell'applicazione per caricare la pagina aggiornata
     st.rerun()
 
